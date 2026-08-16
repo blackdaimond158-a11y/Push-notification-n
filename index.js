@@ -16,7 +16,7 @@ admin.initializeApp({
 const db = admin.firestore();
 
 // ════════════════════════════════════════════════════════════
-// ১. সার্ভিস ওয়ার্কার রুট (ব্রাউজার ব্যাকগ্রাউন্ডের জন্য)
+// ১. সার্ভিস ওয়ার্কার (SW) রুট (apiKey সহ ফিক্সড)
 // ════════════════════════════════════════════════════════════
 app.get('/firebase-messaging-sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
@@ -24,21 +24,44 @@ app.get('/firebase-messaging-sw.js', (req, res) => {
     importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js');
     importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js');
 
-    firebase.initializeApp({
+    const firebaseConfig = {
+      apiKey: "AIzaSyA1oGWkI4OyUtq1Oe-4a0i2u7oF_EkyvRk",
+      authDomain: "techxzone-e692e.firebaseapp.com",
       projectId: "techxzone-e692e",
+      storageBucket: "techxzone-e692e.firebasestorage.app",
       messagingSenderId: "115715756703",
       appId: "1:115715756703:web:c97d8cca69cec84bfe7fbe"
-    });
+    };
+
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
 
     const messaging = firebase.messaging();
 
     messaging.onBackgroundMessage((payload) => {
-      const notificationTitle = (payload.data && payload.data.title) || 'Notification';
-      const notificationOptions = {
-        body: (payload.data && payload.data.body) || '',
+      const title = (payload.data && payload.data.title) || (payload.notification && payload.notification.title) || 'Notification';
+      const options = {
+        body: (payload.data && payload.data.body) || (payload.notification && payload.notification.body) || '',
         icon: (payload.data && payload.data.imageUrl) || ''
       };
-      self.registration.showNotification(notificationTitle, notificationOptions);
+      self.registration.showNotification(title, options);
+    });
+
+    self.addEventListener('push', (event) => {
+      if (event.data) {
+        try {
+          const payload = event.data.json();
+          const title = (payload.data && payload.data.title) || (payload.notification && payload.notification.title) || 'Notification';
+          const options = {
+            body: (payload.data && payload.data.body) || (payload.notification && payload.notification.body) || '',
+            icon: (payload.data && payload.data.imageUrl) || ''
+          };
+          event.waitUntil(self.registration.showNotification(title, options));
+        } catch (e) {
+          event.waitUntil(self.registration.showNotification('Notification', { body: event.data.text() }));
+        }
+      }
     });
   `);
 });
@@ -127,8 +150,6 @@ app.get('/', (req, res) => {
   @keyframes slide-in{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:translateY(0);}}
   .notif .title{font-weight:600;font-size:13.5px;margin-bottom:3px;}
   .notif .body{font-size:12.5px;color:var(--text-muted);line-height:1.5;}
-  .notif img{max-width:100%;border-radius:6px;margin-top:8px;display:block;}
-  .notif .time{font-size:10.5px;color:var(--text-dim);margin-top:6px;font-family:'JetBrains Mono',monospace;}
   .msg{font-size:12px;padding:10px 12px;border-radius:8px;margin-top:12px;}
   .msg.err{background:var(--alert-soft);color:#FFB4AA;border:1px solid rgba(255,107,91,.3);}
   .msg.ok{background:var(--signal-soft);color:var(--signal-bright);border:1px solid rgba(70,201,165,.3);}
@@ -234,10 +255,16 @@ async function connectDevice(){
       return;
     }
 
-    const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+    // আগের কোনো সার্ভিস ওয়ার্কার আটকে থাকলে আনরেজিস্টার করে ফ্রেশ ইন্সটল
+    const existing = await navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js');
+    if (existing) { await existing.unregister(); }
+
+    const registration = await navigator.serviceWorker.register('/firebase-messaging-sw.js', { scope: '/' });
     await navigator.serviceWorker.ready;
 
-    firebase.initializeApp(firebaseConfig);
+    if (!firebase.apps.length) {
+      firebase.initializeApp(firebaseConfig);
+    }
     const messaging = firebase.messaging();
 
     const token = await messaging.getToken({ vapidKey, serviceWorkerRegistration: registration });
@@ -289,8 +316,7 @@ function addToFeed(data){
   if(feed.querySelector('.feed-empty')) feed.innerHTML = '';
   const card = document.createElement('div');
   card.className = 'notif';
-  const time = new Date().toLocaleTimeString('en-GB');
-  card.innerHTML = '<div class="title">' + (data.title || 'নোটিফিকেশন') + '</div><div class="body">' + (data.body || '') + '</div><div class="time">' + time + '</div>';
+  card.innerHTML = '<div class="title">' + (data.title || 'নোটিফিকেশন') + '</div><div class="body">' + (data.body || '') + '</div>';
   feed.prepend(card);
 }
 
