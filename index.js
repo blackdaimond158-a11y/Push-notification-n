@@ -7,12 +7,20 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// ── Firebase Admin initialize ──
-let serviceAccount;
+// ════════════════════════════════════════════════════════════
+// ১. Firebase Admin Initialize
+// ════════════════════════════════════════════════════════════
+let serviceAccount = null;
+
+// ফাইল বা Environment Variable থেকে Service Account লোড করা
 try {
-  serviceAccount = require('./serviceAccountKey.json');
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+  } else {
+    serviceAccount = require('./serviceAccountKey.json');
+  }
 } catch (e) {
-  console.error('serviceAccountKey.json load error:', e.message);
+  console.warn('⚠️ serviceAccountKey.json পাওয়া যায়নি:', e.message);
 }
 
 if (serviceAccount) {
@@ -20,18 +28,38 @@ if (serviceAccount) {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
     });
+    console.log('✅ Firebase Admin সফলভাবে সংযুক্ত হয়েছে।');
   } catch (e) {
-    console.error('Firebase Admin init error:', e.message);
+    console.error('❌ Firebase Admin init error:', e.message);
   }
 }
 
 const db = admin.apps.length ? admin.firestore() : null;
 
-// মেমোরি ব্যাকআপ (যদি Firestore ডাটাবেজে কোনো সমস্যা থাকে)
+// মেমোরি ব্যাকআপ (Firestore-এ সমস্যা হলে কাজ করবে)
 const memoryTokens = new Map();
 
 // ════════════════════════════════════════════════════════════
-// ১. সার্ভিস ওয়ার্কার (SW)
+// ২. Helper Functions
+// ════════════════════════════════════════════════════════════
+function isValidAppId(appId) {
+  return Boolean(appId && /^[a-zA-Z0-9._\-]{3,100}$/.test(appId));
+}
+
+function tokenDocId(token) {
+  return token.replace(/[^a-zA-Z0-9]/g, '').substring(0, 20);
+}
+
+function devicesRef(appId) {
+  return db ? db.collection('push_tokens').doc(appId).collection('devices') : null;
+}
+
+function appMetaRef(appId) {
+  return db ? db.collection('push_app_meta').doc(appId) : null;
+}
+
+// ════════════════════════════════════════════════════════════
+// ৩. Firebase Service Worker (SW) Endpoint
 // ════════════════════════════════════════════════════════════
 app.get('/firebase-messaging-sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
@@ -80,16 +108,27 @@ app.get('/firebase-messaging-sw.js', (req, res) => {
         }
       }
     });
+
+    self.addEventListener('notificationclick', (event) => {
+      event.notification.close();
+      event.waitUntil(
+        clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+          for (const client of clientList) {
+            if (client.url && 'focus' in client) return client.focus();
+          }
+          if (clients.openWindow) return clients.openWindow('/');
+        })
+      );
+    });
   `);
 });
 
 // ════════════════════════════════════════════════════════════
-// ২. মূল ওয়েব পেজ (UI)
+// ৪. মূল টেস্ট ডিভাইস UI (GET /)
 // ════════════════════════════════════════════════════════════
 app.get('/', (req, res) => {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.send(`
-<!DOCTYPE html>
+  res.send(`<!DOCTYPE html>
 <html lang="bn">
 <head>
 <meta charset="UTF-8">
@@ -167,6 +206,8 @@ app.get('/', (req, res) => {
   @keyframes slide-in{from{opacity:0;transform:translateY(-6px);}to{opacity:1;transform:translateY(0);}}
   .notif .title{font-weight:600;font-size:13.5px;margin-bottom:3px;}
   .notif .body{font-size:12.5px;color:var(--text-muted);line-height:1.5;}
+  .notif img{max-width:100%;border-radius:6px;margin-top:8px;display:block;}
+  .notif .time{font-size:10.5px;color:var(--text-dim);margin-top:6px;font-family:'JetBrains Mono',monospace;}
   .msg{font-size:12px;padding:10px 12px;border-radius:8px;margin-top:12px;}
   .msg.err{background:var(--alert-soft);color:#FFB4AA;border:1px solid rgba(255,107,91,.3);}
   .msg.ok{background:var(--signal-soft);color:var(--signal-bright);border:1px solid rgba(70,201,165,.3);}
@@ -184,19 +225,19 @@ app.get('/', (req, res) => {
     </div>
     <div><h1>Wevlo Push</h1><span>Test Device</span></div>
   </header>
-  <p class="lede">এই পেজটা একটা ভার্চুয়াল ডিভাইস — কানেক্ট করলে এটা পুশ সার্ভারে FCM টোকেন রেজিস্টার করবে।</p>
+  <p class="lede">এই পেজটি একটি ভার্চুয়াল টেস্ট ডিভাইস হিসেবে কাজ করবে — কানেক্ট করলে এটি পুশ সার্ভারে টোকেন রেজিস্টার করবে।</p>
 
   <div class="device-orb" id="orb">
     <div class="ring"></div>
     <div class="ring r2"></div>
     <div class="core" id="orbIcon">📴</div>
   </div>
-  <div class="status-line" id="statusLine">ডিভাইস সংযুক্ত নয়</div>
+  <div class="status-line" id="statusLine">ডিভাইস সংযুক্ত নয়</div>
 
   <div class="card" id="setupCard">
-    <h2>১. পুশ সার্ভার</h2>
+    <h2>১. পুশ সার্ভার কনফিগারেশন</h2>
     <label>Server Base URL</label>
-    <input type="text" id="baseUrl" class="mono" value="https://push-notification-n-2.onrender.com">
+    <input type="text" id="baseUrl" class="mono" value="">
     <div class="field-row">
       <div>
         <label>App ID (Package Name)</label>
@@ -235,6 +276,7 @@ app.get('/', (req, res) => {
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js"></script>
 <script>
 let currentToken = null;
+document.getElementById('baseUrl').value = window.location.origin;
 
 const firebaseConfig = {
   apiKey: "AIzaSyBqSBOtWVx3ez5COJ1nMKb5VD94o2CZPJA",
@@ -252,9 +294,13 @@ function setMsg(text, ok){
   el.innerHTML = '<div class="msg ' + (ok ? 'ok' : 'err') + '">' + text + '</div>';
 }
 
+function escapeHtml(s){
+  return String(s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; });
+}
+
 async function connectDevice(){
   const btn = document.getElementById('connectBtn');
-  const baseUrl = document.getElementById('baseUrl').value.replace(/\\/$/, '');
+  const baseUrl = document.getElementById('baseUrl').value.replace(/\\/+$/, '');
   const pushAppId = document.getElementById('appId').value.trim();
   const password = document.getElementById('appPassword').value;
   const vapidKey = document.getElementById('fbVapidKey').value.trim();
@@ -264,12 +310,12 @@ async function connectDevice(){
   if(!('serviceWorker' in navigator)){ setMsg('এই ব্রাউজার Service Worker সাপোর্ট করে না', false); return; }
 
   btn.disabled = true;
-  setMsg('পারমিশন চাওয়া হচ্ছে…', true);
+  setMsg('পারমিশন চাওয়া হচ্ছে…', true);
 
   try{
     const permission = await Notification.requestPermission();
     if(permission !== 'granted'){
-      setMsg('নোটিফিকেশন পারমিশন দেওয়া হয়নি — ব্রাউজার সেটিংস থেকে অনুমতি দিন', false);
+      setMsg('নোটিফিকেশন পারমিশন দেওয়া হয়নি — ব্রাউজার সেটিংস থেকে অনুমতি দিন', false);
       btn.disabled = false;
       return;
     }
@@ -287,7 +333,7 @@ async function connectDevice(){
 
     const token = await messaging.getToken({ vapidKey, serviceWorkerRegistration: registration });
     if(!token){
-      setMsg('টোকেন পাওয়া যায়নি — Firebase কনফিগারেশন যাচাই করুন', false);
+      setMsg('টোকেন পাওয়া যায়নি — Firebase কনফিগারেশন যাচাই করুন', false);
       btn.disabled = false;
       return;
     }
@@ -307,10 +353,10 @@ async function connectDevice(){
 
     document.getElementById('orb').classList.add('connected');
     document.getElementById('orbIcon').textContent = '📶';
-    document.getElementById('statusLine').innerHTML = '<b>' + pushAppId + '</b> এ সংযুক্ত ও লাইভ';
+    document.getElementById('statusLine').innerHTML = '<b>' + escapeHtml(pushAppId) + '</b> এ সংযুক্ত ও লাইভ';
     document.getElementById('tokenBox').textContent = token;
     document.getElementById('connectedCard').style.display = 'block';
-    setMsg('সফলভাবে কানেক্ট হয়েছে!', true);
+    setMsg('সফলভাবে কানেক্ট হয়েছে!', true);
 
     messaging.onMessage((payload) => {
       addToFeed(payload.data || {});
@@ -334,50 +380,121 @@ function addToFeed(data){
   if(feed.querySelector('.feed-empty')) feed.innerHTML = '';
   const card = document.createElement('div');
   card.className = 'notif';
-  card.innerHTML = '<div class="title">' + (data.title || 'নোটিফিকেশন') + '</div><div class="body">' + (data.body || '') + '</div>';
+  const time = new Date().toLocaleTimeString('en-GB');
+  card.innerHTML = 
+    '<div class="title">' + escapeHtml(data.title || 'নোটিফিকেশন') + '</div>' +
+    '<div class="body">' + escapeHtml(data.body || '') + '</div>' +
+    (data.imageUrl ? '<img src="' + escapeHtml(data.imageUrl) + '" alt="">' : '') +
+    '<div class="time">' + time + '</div>';
   feed.prepend(card);
 }
 
 function copyToken(){
   if(!currentToken) return;
   navigator.clipboard.writeText(currentToken);
-  setMsg('টোকেন কপি হয়েছে', true);
+  setMsg('টোকেন কপি হয়েছে', true);
 }
 
 function disconnectDevice(){
   document.getElementById('orb').classList.remove('connected');
   document.getElementById('orbIcon').textContent = '📴';
-  document.getElementById('statusLine').textContent = 'ডিভাইস সংযুক্ত নয়';
+  document.getElementById('statusLine').textContent = 'ডিভাইস সংযুক্ত নয়';
   document.getElementById('connectedCard').style.display = 'none';
   currentToken = null;
-  setMsg('ডিসকানেক্ট হয়েছে', true);
+  setMsg('ডিসকানেক্ট হয়েছে', true);
 }
 </script>
 </body>
-</html>
-  `);
+</html>`);
 });
 
 // ════════════════════════════════════════════════════════════
-// ৩. API ROUTES
+// ৫. API Routes
 // ════════════════════════════════════════════════════════════
+
+// ── Debug Route ──
+app.get('/debug', (req, res) => {
+  res.json({
+    firebase_connected: Boolean(admin.apps.length),
+    project_id:         serviceAccount ? serviceAccount.project_id : null,
+    client_email:       serviceAccount ? serviceAccount.client_email : null,
+    private_key_id:     serviceAccount ? serviceAccount.private_key_id : null,
+    active_memory_apps: Array.from(memoryTokens.keys())
+  });
+});
+
+// ── App Status ──
+app.get('/app-status', async (req, res) => {
+  const { appId } = req.query;
+  if (!isValidAppId(appId)) return res.status(400).json({ success: false, error: 'valid appId required' });
+
+  try {
+    let registered = false;
+    let registeredAt = null;
+    let tokenCount = 0;
+
+    if (db) {
+      const metaDoc   = await appMetaRef(appId).get();
+      const tokenSnap = await devicesRef(appId).get();
+      registered   = metaDoc.exists;
+      registeredAt = metaDoc.exists ? metaDoc.data().registeredAt : null;
+      tokenCount   = tokenSnap.size;
+    } else {
+      registered = memoryTokens.has(appId);
+      tokenCount = memoryTokens.has(appId) ? memoryTokens.get(appId).size : 0;
+    }
+
+    res.json({
+      success: true,
+      appId,
+      registered,
+      registeredAt,
+      tokenCount
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── Register App ──
+app.post('/register-app', async (req, res) => {
+  const { appId } = req.body;
+  if (!isValidAppId(appId)) return res.status(400).json({ success: false, error: 'valid appId required' });
+
+  try {
+    if (db) {
+      const ref = appMetaRef(appId);
+      const doc = await ref.get();
+      await ref.set({
+        appId,
+        registeredAt: doc.exists ? doc.data().registeredAt : Date.now(),
+        updatedAt:    Date.now()
+      }, { merge: true });
+    }
+    console.log(`[${appId}] App registered/updated`);
+    res.json({ success: true, message: 'app registered' });
+  } catch (e) {
+    console.error('Register-app error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
 
 // ── Register Token ──
 app.post('/register-token', async (req, res) => {
   const { token, appId, userAgent } = req.body;
-  if (!token || !appId) return res.status(400).json({ success: false, error: 'token and appId required' });
+  if (!token) return res.status(400).json({ success: false, error: 'token required' });
+  if (!isValidAppId(appId)) return res.status(400).json({ success: false, error: 'valid appId required' });
 
-  // মেমোরিতে টোকেন স্টোর করা হচ্ছে
+  // মেমোরি স্টোরেজ আপডেট
   if (!memoryTokens.has(appId)) {
     memoryTokens.set(appId, new Set());
   }
   memoryTokens.get(appId).add(token);
 
-  // Firestore-এ চেষ্টা করা হচ্ছে (যদি এরর আসে তাহলেও রেসপন্স আটকে যাবে না)
+  // Firestore আপডেট
   if (db) {
-    const docId = token.replace(/[^a-zA-Z0-9]/g, '').substring(0, 20);
     try {
-      await db.collection('push_tokens').doc(appId).collection('devices').doc(docId).set({
+      await devicesRef(appId).doc(tokenDocId(token)).set({
         token,
         appId,
         userAgent:    userAgent || '',
@@ -389,41 +506,79 @@ app.post('/register-token', async (req, res) => {
     }
   }
 
-  console.log(`[${appId}] Token registered successfully`);
+  console.log(`[${appId}] Token registered: ${token.substring(0, 20)}...`);
   res.json({ success: true });
+});
+
+// ── Get Tokens ──
+app.get('/tokens', async (req, res) => {
+  const { appId } = req.query;
+  if (!isValidAppId(appId)) return res.status(400).json({ success: false, error: 'valid appId required' });
+
+  try {
+    let tokens = [];
+    if (db) {
+      const snap = await devicesRef(appId).get();
+      tokens = snap.docs.map(d => ({
+        token:        d.data().token,
+        registeredAt: d.data().registeredAt,
+        userAgent:    d.data().userAgent || ''
+      }));
+    } else if (memoryTokens.has(appId)) {
+      tokens = Array.from(memoryTokens.get(appId)).map(t => ({
+        token: t,
+        registeredAt: Date.now(),
+        userAgent: ''
+      }));
+    }
+
+    res.json({ success: true, appId, count: tokens.length, tokens });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 // ── Send Notification to single token ──
 app.post('/send-notification', async (req, res) => {
   const { token, title, body, imageUrl } = req.body;
   if (!token) return res.status(400).json({ success: false, error: 'token required' });
+  if (!admin.apps.length) return res.status(500).json({ success: false, error: 'Firebase Admin not initialized' });
 
   try {
     const message = {
       token,
-      data: { title: title || 'Notification', body: body || '', ...(imageUrl ? { imageUrl } : {}) },
+      data: { 
+        title: String(title || 'Notification'), 
+        body: String(body || ''), 
+        ...(imageUrl ? { imageUrl: String(imageUrl) } : {}) 
+      },
       android: { priority: 'high' }
     };
+
     const msgId = await admin.messaging().send(message);
     res.json({ success: true, messageId: msgId });
   } catch (e) {
+    console.error('Send error:', e.message);
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ── Send to All ──
+// ── Send to All tokens of an appId ──
 app.post('/send-all', async (req, res) => {
   const { appId, title, body, imageUrl } = req.body;
-  if (!appId) return res.status(400).json({ success: false, error: 'valid appId required' });
+  if (!isValidAppId(appId)) return res.status(400).json({ success: false, error: 'valid appId required' });
+  if (!admin.apps.length) return res.status(500).json({ success: false, error: 'Firebase Admin not initialized' });
 
   let tokens = [];
+  let tokenDocs = [];
 
   if (db) {
     try {
-      const snap = await db.collection('push_tokens').doc(appId).collection('devices').get();
+      const snap = await devicesRef(appId).get();
+      tokenDocs = snap.docs;
       tokens = snap.docs.map(d => d.data().token).filter(Boolean);
     } catch (e) {
-      console.warn('Firestore read error, using memory fallback');
+      console.warn('Firestore read error, using memory fallback:', e.message);
     }
   }
 
@@ -437,27 +592,64 @@ app.post('/send-all', async (req, res) => {
 
   const messages = tokens.map(token => ({
     token,
-    data: { title: title || 'Notification', body: body || '', ...(imageUrl ? { imageUrl } : {}) },
+    data: { 
+      title: String(title || 'Notification'), 
+      body: String(body || ''), 
+      ...(imageUrl ? { imageUrl: String(imageUrl) } : {}) 
+    },
     android: { priority: 'high' }
   }));
 
   try {
     const result = await admin.messaging().sendEach(messages);
-    res.json({ success: true, total: tokens.length, successCount: result.successCount });
+    console.log(`[${appId}] Sent: ${result.successCount} ok, ${result.failureCount} failed`);
+
+    // ইনভ্যালিড টোকেনগুলো ডাটাবেজ থেকে মুছে ফেলা
+    if (db && tokenDocs.length > 0) {
+      const batch = db.batch();
+      let removed = 0;
+      result.responses.forEach((r, i) => {
+        if (!r.success && tokenDocs[i]) {
+          batch.delete(tokenDocs[i].ref);
+          removed++;
+        }
+      });
+      if (removed > 0) await batch.commit();
+    }
+
+    res.json({
+      success:      true,
+      appId,
+      total:        tokens.length,
+      successCount: result.successCount,
+      failureCount: result.failureCount
+    });
+  } catch (e) {
+    console.error('Send-all error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── Delete a token ──
+app.delete('/token', async (req, res) => {
+  const { appId, token } = req.query;
+  if (!isValidAppId(appId) || !token) return res.status(400).json({ success: false, error: 'appId and token required' });
+
+  try {
+    if (memoryTokens.has(appId)) {
+      memoryTokens.get(appId).delete(token);
+    }
+    if (db) {
+      await devicesRef(appId).doc(tokenDocId(token)).delete();
+    }
+    res.json({ success: true });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ── Debug Route ──
-app.get('/debug', (req, res) => {
-  res.json({
-    project_id:      serviceAccount ? serviceAccount.project_id : null,
-    client_email:    serviceAccount ? serviceAccount.client_email : null,
-    private_key_id:  serviceAccount ? serviceAccount.private_key_id : null,
-    active_memory_apps: Array.from(memoryTokens.keys())
-  });
-});
-
+// ════════════════════════════════════════════════════════════
+// ৬. Server Start
+// ════════════════════════════════════════════════════════════
 const PORT = process.env.PORT || 7860;
-app.listen(PORT, () => console.log(`Wevlo Push Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Wevlo Push Server running on port ${PORT}`));
