@@ -16,7 +16,7 @@ admin.initializeApp({
 const db = admin.firestore();
 
 // ════════════════════════════════════════════════════════════
-// ১. সার্ভিস ওয়ার্কার (SW) রুট (apiKey সহ ফিক্সড)
+// ১. সার্ভিস ওয়ার্কার (SW) রুট
 // ════════════════════════════════════════════════════════════
 app.get('/firebase-messaging-sw.js', (req, res) => {
   res.setHeader('Content-Type', 'application/javascript');
@@ -25,12 +25,14 @@ app.get('/firebase-messaging-sw.js', (req, res) => {
     importScripts('https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging-compat.js');
 
     const firebaseConfig = {
-      apiKey: "AIzaSyA1oGWkI4OyUtq1Oe-4a0i2u7oF_EkyvRk",
+      apiKey: "AIzaSyBqSBOtWVx3ez5COJ1nMKb5VD94o2CZPJA",
       authDomain: "techxzone-e692e.firebaseapp.com",
+      databaseURL: "https://techxzone-e692e-default-rtdb.firebaseio.com",
       projectId: "techxzone-e692e",
       storageBucket: "techxzone-e692e.firebasestorage.app",
-      messagingSenderId: "115715756703",
-      appId: "1:115715756703:web:c97d8cca69cec84bfe7fbe"
+      messagingSenderId: "376648087838",
+      appId: "1:376648087838:web:abe7ba67487274e204710f",
+      measurementId: "G-LWEC9VY323"
     };
 
     if (!firebase.apps.length) {
@@ -220,12 +222,14 @@ app.get('/', (req, res) => {
 let currentToken = null;
 
 const firebaseConfig = {
-  apiKey: "AIzaSyA1oGWkI4OyUtq1Oe-4a0i2u7oF_EkyvRk",
+  apiKey: "AIzaSyBqSBOtWVx3ez5COJ1nMKb5VD94o2CZPJA",
   authDomain: "techxzone-e692e.firebaseapp.com",
+  databaseURL: "https://techxzone-e692e-default-rtdb.firebaseio.com",
   projectId: "techxzone-e692e",
   storageBucket: "techxzone-e692e.firebasestorage.app",
-  messagingSenderId: "115715756703",
-  appId: "1:115715756703:web:c97d8cca69cec84bfe7fbe"
+  messagingSenderId: "376648087838",
+  appId: "1:376648087838:web:abe7ba67487274e204710f",
+  measurementId: "G-LWEC9VY323"
 };
 
 function setMsg(text, ok){
@@ -255,7 +259,6 @@ async function connectDevice(){
       return;
     }
 
-    // আগের কোনো সার্ভিস ওয়ার্কার আটকে থাকলে আনরেজিস্টার করে ফ্রেশ ইন্সটল
     const existing = await navigator.serviceWorker.getRegistration('/firebase-messaging-sw.js');
     if (existing) { await existing.unregister(); }
 
@@ -316,7 +319,8 @@ function addToFeed(data){
   if(feed.querySelector('.feed-empty')) feed.innerHTML = '';
   const card = document.createElement('div');
   card.className = 'notif';
-  card.innerHTML = '<div class="title">' + (data.title || 'নোটিফিকেশন') + '</div><div class="body">' + (data.body || '') + '</div>';
+  const time = new Date().toLocaleTimeString('en-GB');
+  card.innerHTML = '<div class="title">' + (data.title || 'নোটিফিকেশন') + '</div><div class="body">' + (data.body || '') + '</div><div class="time">' + time + '</div>';
   feed.prepend(card);
 }
 
